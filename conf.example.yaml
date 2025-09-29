@@ -1,0 +1,53 @@
+# ============================================================================
+# KAFKA COLLECTOR CONFIGURATION
+# ============================================================================
+# This file defines HTTP endpoints that map to Kafka topics and partitions.
+# Copy this file to conf.yaml and modify as needed.
+#
+# Each endpoint configuration requires:
+# - path: HTTP endpoint path (must be unique, non-empty)
+# - kafka_topic: Target Kafka topic name (must be non-empty)
+# - kafka_partition: Target partition number (0-based integer)
+#
+# The collector will:
+# 1. Create POST endpoints for each configured path
+# 2. Forward request bodies to the specified Kafka topic/partition
+# 3. Return JSON responses indicating success or failure
+#
+# Example request:
+#   POST /api/v1/events
+#   Content-Type: application/json
+#   Body: {"event": "click", "user_id": 123}
+#
+# Example response:
+#   {"status": "success", "message": "Message sent to Kafka", "topic": "user_events", "partition": 0}
+# ============================================================================
+
+endpoints:
+  # User interaction events (clicks, views, page loads)
+  # Recommended for high-volume event tracking
+  - path: "/api/v1/events"
+    kafka_topic: "user_events"
+    kafka_partition: 0
+
+  # User actions requiring authentication (login, logout, purchases)
+  # Separate partition for better organization and processing
+  - path: "/api/v1/actions"
+    kafka_topic: "user_actions"
+    kafka_partition: 1
+
+  # Application logs and error reporting
+  # Can be processed by log aggregation systems
+  - path: "/api/v1/logs"
+    kafka_topic: "application_logs"
+    kafka_partition: 0
+
+  # Example: Analytics data with different partition for scaling
+  # - path: "/api/v1/analytics"
+  #   kafka_topic: "analytics_data"
+  #   kafka_partition: 2
+
+  # Example: Real-time notifications
+  # - path: "/api/v1/notifications"
+  #   kafka_topic: "notifications"
+  #   kafka_partition: 0

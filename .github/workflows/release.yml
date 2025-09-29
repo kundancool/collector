@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: x86_64-linux
+          - os: macos-13
+            target: x86_64-apple-darwin
+            name: x86_64-macos
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: arm64-macos
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: x86_64-windows
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup MSVC (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Install cmake (Windows)
+        if: matrix.os == 'windows-latest'
+        run: choco install cmake --yes
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          MACOSX_DEPLOYMENT_TARGET: 11.0
+
+      - name: Strip and rename binary (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          strip target/${{ matrix.target }}/release/collector
+          mv target/${{ matrix.target }}/release/collector collector-x86_64-linux
+          chmod +x collector-x86_64-linux
+
+      - name: Strip and rename binary (macOS x86_64)
+        if: matrix.os == 'macos-13'
+        run: |
+          strip target/${{ matrix.target }}/release/collector
+          mv target/${{ matrix.target }}/release/collector collector-x86_64-macos
+          chmod +x collector-x86_64-macos
+
+      - name: Strip and rename binary (macOS ARM64)
+        if: matrix.os == 'macos-latest' && matrix.target == 'aarch64-apple-darwin'
+        run: |
+          strip target/${{ matrix.target }}/release/collector
+          mv target/${{ matrix.target }}/release/collector collector-arm64-macos
+          chmod +x collector-arm64-macos
+
+      - name: Rename binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: mv target/${{ matrix.target }}/release/collector.exe collector-x86_64-windows.exe
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ matrix.os == 'windows-latest' && format('collector-{0}.exe', matrix.name) || format('collector-{0}', matrix.name) }}
+
+  create-release:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

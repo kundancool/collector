@@ -1,0 +1,27 @@
+[package]
+name = "collector"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "High-performance HTTP-to-Kafka bridge for collecting and forwarding HTTP requests to Apache Kafka"
+keywords = ["kafka", "http", "bridge", "collector", "microservice"]
+categories = ["network-programming", "web-programming", "development-tools"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/your-username/kafka-rust"
+homepage = "https://github.com/your-username/kafka-rust"
+
+[dependencies]
+actix-web = "4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+rdkafka = { version = "0.38", features = ["tokio", "cmake_build"] }
+tokio = { version = "1", features = ["full"] }
+log = "0.4"
+env_logger = "0.10"
+dotenv = "0.15"
+clap = { version = "4.0", features = ["derive"] }
+
+[target.'cfg(unix)'.dependencies]
+daemonize = "0.5"
