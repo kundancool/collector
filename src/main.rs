@@ -51,7 +51,7 @@ struct Args {
     daemon: bool,
 
     /// Configuration file path
-    #[arg(short, long, default_value = "conf.yaml")]
+    #[arg(short, long, default_value = "/etc/collector/config.yaml")]
     config: String,
 
     /// PID file for daemon mode
@@ -132,7 +132,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Load environment variables from .env file if present
-    dotenv::dotenv().ok();
+    // Try /etc/collector/.env first, then .env in current directory
+    if std::path::Path::new("/etc/collector/.env").exists() {
+        dotenv::from_path("/etc/collector/.env").ok();
+    } else {
+        dotenv::dotenv().ok();
+    }
 
     // Handle daemon mode
     #[cfg(unix)]
@@ -173,8 +178,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket_timeout =
         std::env::var("KAFKA_SOCKET_TIMEOUT_MS").unwrap_or_else(|_| "5000".to_string());
 
-    log::info!("Loading configuration from {}", args.config);
-    let config: Config = match std::fs::File::open(&args.config) {
+    // If default config doesn't exist, try conf.yaml in current directory
+    let config_path = if args.config == "/etc/collector/config.yaml" && !std::path::Path::new(&args.config).exists() {
+        "conf.yaml".to_string()
+    } else {
+        args.config.clone()
+    };
+
+    log::info!("Loading configuration from {}", config_path);
+    let config: Config = match std::fs::File::open(&config_path) {
         Ok(file) => serde_yaml::from_reader(file)?,
         Err(e) => {
             log::error!("Failed to open {}: {:?}", args.config, e);
