@@ -30,6 +30,7 @@
 
 use actix_web::{web, App, HttpResponse, HttpServer};
 use clap::Parser;
+#[cfg(unix)]
 use daemonize::Daemonize;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
@@ -138,8 +139,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service_group = std::env::var("SERVICE_GROUP").unwrap_or_else(|_| "daemon".to_string());
 
     // Handle daemon mode
+    #[cfg(unix)]
     if args.daemon {
         daemonize_process(&args, &service_user, &service_group)?;
+    }
+    #[cfg(not(unix))]
+    if args.daemon {
+        return Err("Daemon mode is not supported on this platform".into());
     }
 
     // Initialize logging based on mode
