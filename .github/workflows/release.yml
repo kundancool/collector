@@ -17,7 +17,10 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            name: x86_64-linux
+            name: x86_64-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            name: x86_64-linux-musl
           - os: macos-13
             target: x86_64-apple-darwin
             name: x86_64-macos
@@ -36,6 +39,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install musl tools (Linux musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Setup MSVC (Windows)
         if: matrix.os == 'windows-latest'
@@ -74,12 +81,55 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: mv target/${{ matrix.target }}/release/collector.exe collector-x86_64-windows.exe
 
+      - name: Build .deb package (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev
+          mkdir -p package/DEBIAN package/usr/bin package/etc/collector package/etc/systemd/system
+          cp collector-x86_64-linux package/usr/bin/collector
+          cp conf.example.yaml package/etc/collector/config.yaml
+          cp .env.example package/etc/collector/.env
+          cat > package/etc/systemd/system/collector.service << 'EOF'
+[Unit]
+Description=Kafka Collector - HTTP to Kafka Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+EnvironmentFile=/etc/collector/.env
+ExecStart=/usr/bin/collector -c /etc/collector/config.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+          cat > package/DEBIAN/control << 'EOF'
+Package: collector
+Version: 0.1.10
+Architecture: amd64
+Maintainer: Your Name <your.email@example.com>
+Description: Kafka Collector - HTTP to Kafka Bridge
+Depends: systemd
+EOF
+          cat > package/DEBIAN/postinst << 'EOF'
+#!/bin/bash
+systemctl daemon-reload
+systemctl enable collector
+EOF
+          chmod +x package/DEBIAN/postinst
+          dpkg-deb --build package collector_0.1.10_amd64.deb
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: |
             ${{ matrix.os == 'windows-latest' && format('collector-{0}.exe', matrix.name) || format('collector-{0}', matrix.name) }}
+            ${{ matrix.os == 'ubuntu-latest' && 'collector_0.1.10_amd64.deb' || '' }}
 
   create-release:
     needs: release
