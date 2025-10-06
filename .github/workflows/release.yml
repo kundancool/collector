@@ -36,6 +36,8 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          MACOSX_DEPLOYMENT_TARGET: 11.0
 
       - name: Strip and rename binary (Linux)
         if: matrix.os == 'ubuntu-latest'
