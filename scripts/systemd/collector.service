@@ -1,0 +1,15 @@
+[Unit]
+Description=Kafka Collector - HTTP to Kafka Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+EnvironmentFile=/etc/collector/.env
+ExecStart=/usr/bin/collector -c /etc/collector/config.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

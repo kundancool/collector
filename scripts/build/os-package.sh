@@ -40,23 +40,7 @@ build_deb() {
     cp "$SCRIPT_DIR/../../.env.example" "$DEB_DIR/etc/collector/.env"
 
     # Service file
-    cat > "$DEB_DIR/etc/systemd/system/collector.service" << 'EOF'
-[Unit]
-Description=Kafka Collector - HTTP to Kafka Bridge
-After=network.target
-
-[Service]
-Type=simple
-User=nobody
-Group=nogroup
-EnvironmentFile=/etc/collector/.env
-ExecStart=/usr/bin/collector -c /etc/collector/config.yaml
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    cp "$SCRIPT_DIR/../../scripts/systemd/collector.service" "$DEB_DIR/etc/systemd/system/"
 
     # Control file
     cat > "$DEB_DIR/DEBIAN/control" << EOF
@@ -110,20 +94,7 @@ package() {
 EOF
 
     # Init script
-    cat > "$APK_DIR/collector.initd" << 'EOF'
-#!/sbin/openrc-run
-
-description="Kafka Collector - HTTP to Kafka Bridge"
-command="/usr/bin/collector"
-command_args="-c /etc/collector/config.yaml"
-command_user="nobody:nogroup"
-pidfile="/run/${RC_SVCNAME}.pid"
-
-depend() {
-    need net
-}
-EOF
-    chmod +x "$APK_DIR/collector.initd"
+    cp "$SCRIPT_DIR/../../scripts/openrc/collector" "$APK_DIR/collector.initd"
 
     # Conf file
     cat > "$APK_DIR/collector.confd" << 'EOF'

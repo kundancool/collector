@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+
+description="Kafka Collector - HTTP to Kafka Bridge"
+command="/usr/bin/collector"
+command_args="-c /etc/collector/config.yaml"
+command_user="nobody:nogroup"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+    need net
+}

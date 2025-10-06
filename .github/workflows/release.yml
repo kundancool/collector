@@ -90,23 +90,7 @@ jobs:
           cp collector-x86_64-linux package/usr/bin/collector
           cp conf.example.yaml package/etc/collector/config.yaml
           cp .env.example package/etc/collector/.env
-          cat > package/etc/systemd/system/collector.service << 'EOF'
-[Unit]
-Description=Kafka Collector - HTTP to Kafka Bridge
-After=network.target
-
-[Service]
-Type=simple
-User=nobody
-Group=nogroup
-EnvironmentFile=/etc/collector/.env
-ExecStart=/usr/bin/collector -c /etc/collector/config.yaml
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
+           cp scripts/systemd/collector.service package/etc/systemd/system/
           cat > package/DEBIAN/control << 'EOF'
 Package: collector
 Version: 0.1.10
@@ -127,9 +111,9 @@ EOF
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: |
-            ${{ matrix.os == 'windows-latest' && format('collector-{0}.exe', matrix.name) || format('collector-{0}', matrix.name) }}
-            ${{ matrix.os == 'ubuntu-latest' && 'collector_0.1.10_amd64.deb' || '' }}
+          path:
+            - ${{ matrix.os == 'windows-latest' && format('collector-{0}.exe', matrix.name) || format('collector-{0}', matrix.name) }}
+            - ${{ matrix.os == 'ubuntu-latest' && 'collector_0.1.10_amd64.deb' || '' }}
 
   create-release:
     needs: release

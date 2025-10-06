@@ -5,6 +5,8 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Configuration
 VERSION="v0.1.11"
 BINARY_URL="https://github.com/kundancool/collector/releases/download/${VERSION}/collector-x86_64-linux"
@@ -113,46 +115,15 @@ EOF
 
 # Create service file
 if [[ "$SERVICE_TYPE" == "systemd" ]]; then
-    log_info "Creating systemd service"
-    cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
-[Unit]
-Description=Kafka Collector - HTTP to Kafka Bridge
-After=network.target
-
-[Service]
-Type=simple
-User=nobody
-Group=nogroup
-EnvironmentFile=$CONFIG_DIR/.env
-ExecStart=$INSTALL_DIR/collector -c $CONFIG_DIR/config.yaml
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+    log_info "Installing systemd service"
+    cp "$SCRIPT_DIR/../systemd/collector.service" "/etc/systemd/system/${SERVICE_NAME}.service"
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
     log_info "Service enabled. Use 'systemctl start collector' to start"
 
 elif [[ "$SERVICE_TYPE" == "openrc" ]]; then
-    log_info "Creating OpenRC service"
-    cat > "/etc/init.d/${SERVICE_NAME}" << EOF
-#!/sbin/openrc-run
-
-description="Kafka Collector - HTTP to Kafka Bridge"
-command="$INSTALL_DIR/collector"
-command_args="-c $CONFIG_DIR/config.yaml"
-command_user="nobody:nogroup"
-pidfile="/run/\${RC_SVCNAME}.pid"
-
-depend() {
-    need net
-}
-EOF
-
-    chmod +x "/etc/init.d/${SERVICE_NAME}"
+    log_info "Installing OpenRC service"
+    cp "$SCRIPT_DIR/../openrc/collector" "/etc/init.d/${SERVICE_NAME}"
     rc-update add "$SERVICE_NAME" default
     log_info "Service added. Use 'rc-service collector start' to start"
 fi
