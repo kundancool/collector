@@ -91,19 +91,8 @@ jobs:
           cp conf.example.yaml package/etc/collector/config.yaml
           cp .env.example package/etc/collector/.env
            cp scripts/systemd/collector.service package/etc/systemd/system/
-          cat > package/DEBIAN/control << 'EOF'
-Package: collector
-Version: 0.1.10
-Architecture: amd64
-Maintainer: Your Name <your.email@example.com>
-Description: Kafka Collector - HTTP to Kafka Bridge
-Depends: systemd
-EOF
-          cat > package/DEBIAN/postinst << 'EOF'
-#!/bin/bash
-systemctl daemon-reload
-systemctl enable collector
-EOF
+          printf 'Package: collector\nVersion: 0.1.10\nArchitecture: amd64\nMaintainer: Your Name <your.email@example.com>\nDescription: Kafka Collector - HTTP to Kafka Bridge\nDepends: systemd\n' > package/DEBIAN/control
+          printf '#!/bin/bash\nsystemctl daemon-reload\nsystemctl enable collector\n' > package/DEBIAN/postinst
           chmod +x package/DEBIAN/postinst
           dpkg-deb --build package collector_0.1.10_amd64.deb
 
