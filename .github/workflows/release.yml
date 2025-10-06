@@ -46,9 +46,9 @@ jobs:
             echo "version=$VERSION" >> $GITHUB_ENV
           fi
 
-      - name: Install system dependencies
-        run: |
-          apt-get update && apt-get install -y curl dpkg-dev cmake
+       - name: Install system dependencies
+         run: |
+           apt-get update && apt-get install -y curl dpkg-dev cmake build-essential
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
