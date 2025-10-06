@@ -28,13 +28,14 @@
 //! collector -d -c conf.yaml
 //! ```
 
-use actix_web::{web, App, HttpResponse, HttpServer};
+use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 use clap::Parser;
 #[cfg(unix)]
 use daemonize::Daemonize;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::File;
 use std::sync::Arc;
@@ -89,6 +90,30 @@ struct Config {
 /// Health check handler that returns a simple OK response
 async fn health_check() -> HttpResponse {
     HttpResponse::Ok().body("OK")
+}
+
+/// Validate the configuration for correctness
+fn validate_config(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    let mut paths = HashSet::new();
+    for endpoint in &config.endpoints {
+        if endpoint.path.is_empty() {
+            return Err("Endpoint path cannot be empty".into());
+        }
+        if endpoint.kafka_topic.is_empty() {
+            return Err(format!("Kafka topic for path {} cannot be empty", endpoint.path).into());
+        }
+        if endpoint.kafka_partition < 0 {
+            return Err(format!(
+                "Kafka partition for path {} must be >= 0, got {}",
+                endpoint.path, endpoint.kafka_partition
+            )
+            .into());
+        }
+        if !paths.insert(&endpoint.path) {
+            return Err(format!("Duplicate path: {}", endpoint.path).into());
+        }
+    }
+    Ok(())
 }
 
 /// Main entry point for the Kafka Collector application.
@@ -179,7 +204,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("KAFKA_SOCKET_TIMEOUT_MS").unwrap_or_else(|_| "5000".to_string());
 
     // If default config doesn't exist, try conf.yaml in current directory
-    let config_path = if args.config == "/etc/collector/config.yaml" && !std::path::Path::new(&args.config).exists() {
+    let config_path = if args.config == "/etc/collector/config.yaml"
+        && !std::path::Path::new(&args.config).exists()
+    {
         "conf.yaml".to_string()
     } else {
         args.config.clone()
@@ -189,24 +216,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: Config = match std::fs::File::open(&config_path) {
         Ok(file) => serde_yaml::from_reader(file)?,
         Err(e) => {
-            log::error!("Failed to open {}: {:?}", args.config, e);
+            log::error!("Failed to open {}: {:?}", config_path, e);
             return Err(e.into());
         }
     };
 
-    // Validate configuration: ensure paths are unique and not empty
-    let mut paths = HashSet::new();
-    for endpoint in &config.endpoints {
-        if endpoint.path.is_empty() {
-            return Err("Endpoint path cannot be empty".into());
-        }
-        if endpoint.kafka_topic.is_empty() {
-            return Err(format!("Kafka topic for path {} cannot be empty", endpoint.path).into());
-        }
-        if !paths.insert(&endpoint.path) {
-            return Err(format!("Duplicate path: {}", endpoint.path).into());
-        }
-    }
+    // Validate configuration
+    validate_config(&config)?;
 
     log::info!(
         "Creating Kafka producer with bootstrap servers: {}",
@@ -295,30 +311,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             app = app.route(
                 &path,
-                web::post().to(move |body: web::Bytes| {
+                web::post().to(move |req: HttpRequest, body: web::Bytes| {
                     let topic = topic.clone();
                     let producer = Arc::clone(&producer_clone);
                     async move {
+                        // Determine Kafka key: use X-Kafka-Key header if present, otherwise hash of body
+                        let key = if let Some(key_header) = req.headers().get("x-kafka-key") {
+                            key_header.to_str().unwrap_or("").to_string()
+                        } else {
+                            // Generate key from SHA256 hash of body (first 4 bytes as hex)
+                            let mut hasher = Sha256::new();
+                            hasher.update(&body);
+                            let hash = hasher.finalize();
+                            hex::encode(&hash[..4]) // Use first 4 bytes as 8-char hex
+                        };
+
                         // Create Kafka record from request body
                         let record = FutureRecord::to(&topic)
                             .partition(partition)
                             .payload(body.as_ref())
-                            .key(""); // Empty key for now; could be enhanced
+                            .key(&key);
 
                         // Send message to Kafka
                         match producer.send(record, Duration::from_secs(0)).await {
                             Ok(delivery) => {
                                 log::info!(
-                                    "Message sent to topic {} partition {}: {:?}",
+                                    "Message sent to topic {} partition {} with key {}: {:?}",
                                     topic,
                                     partition,
+                                    key,
                                     delivery
                                 );
                                 HttpResponse::Ok().json(serde_json::json!({
                                     "status": "success",
                                     "message": "Message sent to Kafka",
                                     "topic": topic,
-                                    "partition": partition
+                                    "partition": partition,
+                                    "key": key
                                 }))
                             }
                             Err((e, _)) => {
@@ -379,6 +408,98 @@ fn init_logging(args: &Args) {
     } else {
         // Normal mode - log to stdout/stderr
         env_logger::init();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_validation_valid() {
+        let config = Config {
+            endpoints: vec![
+                EndpointConfig {
+                    path: "/api/v1/events".to_string(),
+                    kafka_topic: "events".to_string(),
+                    kafka_partition: 0,
+                },
+                EndpointConfig {
+                    path: "/api/v1/logs".to_string(),
+                    kafka_topic: "logs".to_string(),
+                    kafka_partition: 1,
+                },
+            ],
+        };
+
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_config_validation_empty_path() {
+        let config = Config {
+            endpoints: vec![EndpointConfig {
+                path: "".to_string(),
+                kafka_topic: "events".to_string(),
+                kafka_partition: 0,
+            }],
+        };
+
+        assert!(validate_config(&config).is_err());
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("Endpoint path cannot be empty"));
+    }
+
+    #[test]
+    fn test_config_validation_empty_topic() {
+        let config = Config {
+            endpoints: vec![EndpointConfig {
+                path: "/api/v1/events".to_string(),
+                kafka_topic: "".to_string(),
+                kafka_partition: 0,
+            }],
+        };
+
+        assert!(validate_config(&config).is_err());
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_config_validation_negative_partition() {
+        let config = Config {
+            endpoints: vec![EndpointConfig {
+                path: "/api/v1/events".to_string(),
+                kafka_topic: "events".to_string(),
+                kafka_partition: -1,
+            }],
+        };
+
+        assert!(validate_config(&config).is_err());
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("must be >= 0"));
+    }
+
+    #[test]
+    fn test_config_validation_duplicate_paths() {
+        let config = Config {
+            endpoints: vec![
+                EndpointConfig {
+                    path: "/api/v1/events".to_string(),
+                    kafka_topic: "events".to_string(),
+                    kafka_partition: 0,
+                },
+                EndpointConfig {
+                    path: "/api/v1/events".to_string(),
+                    kafka_topic: "logs".to_string(),
+                    kafka_partition: 1,
+                },
+            ],
+        };
+
+        assert!(validate_config(&config).is_err());
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("Duplicate path"));
     }
 }
 
