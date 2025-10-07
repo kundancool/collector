@@ -7,6 +7,7 @@
 //!
 //! - **Dynamic Endpoints**: Configure multiple HTTP endpoints via YAML that map to Kafka topics and partitions
 //! - **Production Ready**: Includes health checks, environment variable support, comprehensive logging, and error handling
+//! - **CORS Support**: Allows cross-origin requests from any domain for web applications
 //! - **Daemon Mode**: Run as a background daemon with `-d` flag
 //! - **Async Processing**: Built with Tokio and Actix-Web for high concurrency
 //! - **KRaft Support**: Compatible with modern Kafka without Zookeeper
@@ -28,13 +29,15 @@
 //! collector -d -c conf.yaml
 //! ```
 
-use actix_web::{web, App, HttpResponse, HttpServer};
+use actix_cors::Cors;
+use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, web::PayloadConfig};
 use clap::Parser;
 #[cfg(unix)]
 use daemonize::Daemonize;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::File;
 use std::sync::Arc;
@@ -51,7 +54,7 @@ struct Args {
     daemon: bool,
 
     /// Configuration file path
-    #[arg(short, long, default_value = "conf.yaml")]
+    #[arg(short, long, default_value = "/etc/collector/config.yaml")]
     config: String,
 
     /// PID file for daemon mode
@@ -91,6 +94,30 @@ async fn health_check() -> HttpResponse {
     HttpResponse::Ok().body("OK")
 }
 
+/// Validate the configuration for correctness
+fn validate_config(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    let mut paths = HashSet::new();
+    for endpoint in &config.endpoints {
+        if endpoint.path.is_empty() {
+            return Err("Endpoint path cannot be empty".into());
+        }
+        if endpoint.kafka_topic.is_empty() {
+            return Err(format!("Kafka topic for path {} cannot be empty", endpoint.path).into());
+        }
+        if endpoint.kafka_partition < 0 {
+            return Err(format!(
+                "Kafka partition for path {} must be >= 0, got {}",
+                endpoint.path, endpoint.kafka_partition
+            )
+            .into());
+        }
+        if !paths.insert(&endpoint.path) {
+            return Err(format!("Duplicate path: {}", endpoint.path).into());
+        }
+    }
+    Ok(())
+}
+
 /// Main entry point for the Kafka Collector application.
 ///
 /// This function:
@@ -117,6 +144,8 @@ async fn health_check() -> HttpResponse {
 /// - `KAFKA_REQUEST_TIMEOUT_MS`: Request timeout in ms (default: 5000)
 /// - `KAFKA_SOCKET_TIMEOUT_MS`: Socket timeout in ms (default: 5000)
 /// - `PUBLIC_ACCESS`: Set to "true" for public access (changes host to 0.0.0.0)
+/// - `CONFIG_FILE`: Path to the configuration YAML file (optional, with automatic fallbacks)
+/// - `MAX_BODY_SIZE_MB`: Maximum request body size in MB (default: 1)
 /// - `RUST_LOG`: Log level (handled by env_logger)
 ///
 /// # Errors
@@ -132,7 +161,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Load environment variables from .env file if present
-    dotenv::dotenv().ok();
+    // Try /etc/collector/.env first, then .env in current directory
+    if std::path::Path::new("/etc/collector/.env").exists() {
+        dotenv::from_path("/etc/collector/.env").ok();
+    } else {
+        dotenv::dotenv().ok();
+    }
 
     // Handle daemon mode
     #[cfg(unix)]
@@ -159,6 +193,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+    let max_body_size_mb: usize = std::env::var("MAX_BODY_SIZE_MB")
+        .unwrap_or_else(|_| "1".to_string())
+        .parse()
+        .unwrap_or(1);
     let server_addr = format!("{}:{}", host, port);
 
     // Load Kafka configuration from environment (.env file already loaded above)
@@ -173,28 +211,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket_timeout =
         std::env::var("KAFKA_SOCKET_TIMEOUT_MS").unwrap_or_else(|_| "5000".to_string());
 
-    log::info!("Loading configuration from {}", args.config);
-    let config: Config = match std::fs::File::open(&args.config) {
+    // Determine config file path with fallbacks:
+    // 1. Use command line arg if file exists
+    // 2. Use CONFIG_FILE env var if set
+    // 3. Check ./config.yaml
+    // 4. Check /etc/collector/config.yaml
+    // 5. Fallback to ./conf.yaml
+    let config_path = if std::path::Path::new(&args.config).exists() {
+        args.config.clone()
+    } else {
+        std::env::var("CONFIG_FILE").unwrap_or_else(|_| {
+            if std::path::Path::new("config.yaml").exists() {
+                "config.yaml".to_string()
+            } else if std::path::Path::new("/etc/collector/config.yaml").exists() {
+                "/etc/collector/config.yaml".to_string()
+            } else {
+                "conf.yaml".to_string()
+            }
+        })
+    };
+
+    log::info!("Loading configuration from {}", config_path);
+    let config: Config = match std::fs::File::open(&config_path) {
         Ok(file) => serde_yaml::from_reader(file)?,
         Err(e) => {
-            log::error!("Failed to open {}: {:?}", args.config, e);
+            log::error!("Failed to open {}: {:?}", config_path, e);
             return Err(e.into());
         }
     };
 
-    // Validate configuration: ensure paths are unique and not empty
-    let mut paths = HashSet::new();
-    for endpoint in &config.endpoints {
-        if endpoint.path.is_empty() {
-            return Err("Endpoint path cannot be empty".into());
-        }
-        if endpoint.kafka_topic.is_empty() {
-            return Err(format!("Kafka topic for path {} cannot be empty", endpoint.path).into());
-        }
-        if !paths.insert(&endpoint.path) {
-            return Err(format!("Duplicate path: {}", endpoint.path).into());
-        }
-    }
+    // Validate configuration
+    validate_config(&config)?;
 
     log::info!(
         "Creating Kafka producer with bootstrap servers: {}",
@@ -249,7 +296,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let producer = Arc::new(producer);
     let endpoints = config.endpoints;
 
-    // Create endpoint handlers outside the HttpServer closure to avoid duplication
+    // Pre-build endpoint handler configurations to register routes dynamically
     let mut endpoint_handlers = Vec::new();
     for endpoint in &endpoints {
         let path = endpoint.path.clone();
@@ -269,7 +316,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Starting HTTP server on {}", server_addr);
     HttpServer::new(move || {
         let producer = Arc::clone(&producer);
+        // Enable CORS to allow requests from any origin
+        // Limit request payload to prevent excessive memory usage
         let mut app = App::new()
+            .wrap(Cors::permissive())
+            .app_data(PayloadConfig::new(max_body_size_mb * 1024 * 1024))
             .app_data(web::Data::new(producer.clone()))
             // Add health check endpoint
             .route("/health", web::get().to(health_check));
@@ -283,30 +334,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             app = app.route(
                 &path,
-                web::post().to(move |body: web::Bytes| {
+                web::post().to(move |req: HttpRequest, body: web::Bytes| {
                     let topic = topic.clone();
                     let producer = Arc::clone(&producer_clone);
                     async move {
+                        // Determine Kafka key: use X-Kafka-Key header if present,
+                        // otherwise generate from SHA256 hash of request body (first 4 bytes as hex)
+                        let key = if let Some(key_header) = req.headers().get("x-kafka-key") {
+                            key_header.to_str().unwrap_or("").to_string()
+                        } else {
+                            // Generate key from SHA256 hash of body (first 4 bytes as hex)
+                            let mut hasher = Sha256::new();
+                            hasher.update(&body);
+                            let hash = hasher.finalize();
+                            hex::encode(&hash[..4]) // Use first 4 bytes as 8-char hex
+                        };
+
                         // Create Kafka record from request body
                         let record = FutureRecord::to(&topic)
                             .partition(partition)
                             .payload(body.as_ref())
-                            .key(""); // Empty key for now; could be enhanced
+                            .key(&key);
 
                         // Send message to Kafka
                         match producer.send(record, Duration::from_secs(0)).await {
                             Ok(delivery) => {
                                 log::info!(
-                                    "Message sent to topic {} partition {}: {:?}",
+                                    "Message sent to topic {} partition {} with key {}: {:?}",
                                     topic,
                                     partition,
+                                    key,
                                     delivery
                                 );
                                 HttpResponse::Ok().json(serde_json::json!({
                                     "status": "success",
                                     "message": "Message sent to Kafka",
                                     "topic": topic,
-                                    "partition": partition
+                                    "partition": partition,
+                                    "key": key
                                 }))
                             }
                             Err((e, _)) => {
