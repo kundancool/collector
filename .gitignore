@@ -2,6 +2,9 @@
 target/
 Cargo.lock
 
+# Distribution
+dist/
+
 # Environment files
 .env
 

@@ -1,0 +1,29 @@
+[Unit]
+Description=Kafka Collector - HTTP to Kafka Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+EnvironmentFile=-/etc/collector/.env
+ExecStart=/usr/bin/collector -c /etc/collector/config.yaml
+
+# Allow binding to privileged ports (<1024)
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Restart policy
+Restart=always
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

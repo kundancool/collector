@@ -180,7 +180,7 @@ create_service_templates
 create_install_script
 create_dist_readme
 
-local binary_size=$(ls -lah "$DIST_DIR/bin/$BINARY_NAME" | awk '{print $5}')
+binary_size=$(ls -lah "$DIST_DIR/bin/$BINARY_NAME" | awk '{print $5}')
 print_success "Distribution package created in $DIST_DIR/"
 print_info "Package size: $binary_size"
 print_info "Package contents:"
